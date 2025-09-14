@@ -1,9 +1,16 @@
-// TODO: Impliment executeCommand(), debug seg fault, ensure executeCommand() is recieving correct contents
+/* 
+Jonathan Stoll
+CS 446 - HW1
+*/
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <stdlib.h>
 
 int parseInput(char*, char [][500], int);
 void changeDirectories(const char*);
@@ -21,7 +28,9 @@ int main() {
 
 
         // Process and execute user command
-        if (strcmp(splitWords[0], "cd") == 0) {
+        if (numWords == 0)
+            continue; // skip loop iteration and prompt again
+        else if (strcmp(splitWords[0], "cd") == 0) {
             if (numWords == 2)
                 changeDirectories(splitWords[1]);
             else
@@ -31,38 +40,87 @@ int main() {
             return 0;
         }
         else {
-            int numCommands = numWords + 1; // 1 larger than splitWords to include NULL pointer at end
-            char infile[500];
-            char outfile[500];
-            char *enteredCommand[numCommands];
+            char infile[500] = "";
+            char outfile[500] = "";
+            char *enteredCommand[numWords + 1];
+            int numCommands = 0;
+            int badRedirection = 0;
 
             // Parse splitWords, copying to enteredCommand until < or > are uncountered or numWords is reached
             for (int i = 0; i < numWords; i++) {
+
                 if (strcmp(splitWords[i], "<") == 0) {
-                    strcpy(infile, splitWords[i+1]);
+                    if (i + 1 < numWords)
+                        strcpy(infile, splitWords[i + 1]);
+                    else {
+                        printf("No input file specified after '<'\n");
+                        badRedirection = 1;
+                    }
                     break;
                 }
                 else if (strcmp(splitWords[i], ">") == 0) {
-                    strcpy(outfile, splitWords[i+1]);
+                    if (i + 1 < numWords)
+                        strcpy(outfile, splitWords[i + 1]);
+                    else {
+                        printf("No output file specified after '>'\n");
+                        badRedirection = 1;
+                    }
                     break;
                 }
-                strcpy(enteredCommand[i], splitWords[i]); // everything before < or > gets copied directly to enteredCommand
-            }
-            enteredCommand[numCommands - 1] = NULL; // insert nullptr at last element
+                else {
+                    enteredCommand[numCommands++] = splitWords[i]; // everything before < or > gets copied directly to enteredCommand
+                }
 
+            }
+            enteredCommand[numCommands] = NULL; // insert nullptr at last element
+
+            if (badRedirection == 1)
+                    continue; // Skip iteration if no in/out file provided to >/<
 
             executeCommand(enteredCommand, infile, outfile);
         }
 
-    } while(1); // while true
+    } while(1); // loop until user enters "exit"
 
     return 0;
 }
 
 // Execute given command
 int executeCommand(char * const* enteredCommand, const char* infile, const char* outfile) {
-    for (int i = 0; enteredCommand[i] != NULL; i++) {
-        printf("%s\n", enteredCommand[i]);
+    int forkResult = fork();
+
+    if (forkResult == -1) { // Parent, fork failed
+        printf("%s%s\n", "fork Failed: ", strerror(errno));
+        return -1;
+    }
+    else if (forkResult == 0) { // Child
+
+        if (infile != NULL && infile[0] != '\0') {
+            int fd = open(infile, O_RDONLY, 0666);
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+        else if (outfile != NULL && outfile[0] != '\0') {
+            int fd = open(outfile, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+
+        execvp(enteredCommand[0], enteredCommand);
+
+        // Executes if execvp failed
+        printf("%s%s\n", "exec Failed: ", strerror(errno));
+        _exit(1);
+        
+    }
+    else { // Parent, wait for child
+        int status;
+        wait(&status);
+
+        if (WIFEXITED(status) != 0 && WEXITSTATUS(status) != 0)
+            printf("Child finished with error status: %d\n", WEXITSTATUS(status));
+
+        return 0;
     }
 }
 
